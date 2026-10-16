@@ -204,20 +204,30 @@ pub fn validate_entries(entries: &[Entry]) -> Result<(), String> {
 }
 
 /// A name that cannot escape its folder, collide with a device, or smuggle a stream.
+// Allow trailing slashes on directory entries, as they are valid in ZIP archives.
 fn safe_name(name: &str) -> Result<(), String> {
     let normalized = name.replace('\\', "/");
+
+    // ZIP-Verzeichniseinträge dürfen mit "/" enden.
+    // Nur den letzten Schrägstrich entfernen.
+    let normalized = normalized.strip_suffix('/').unwrap_or(&normalized);
+
     if normalized.contains(':') || normalized.starts_with('/') {
         return Err("unsafe archive path".into());
     }
+
     let mut parts = 0;
     for part in normalized.split('/') {
         parts += 1;
+
         if part.is_empty() || part == "." || part == ".." {
             return Err("unsafe archive path".into());
         }
+
         if part.ends_with([' ', '.']) {
             return Err("reserved Windows path".into());
         }
+
         let stem = part.split('.').next().unwrap_or("").to_ascii_uppercase();
         if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
             || (stem.len() == 4
@@ -227,9 +237,11 @@ fn safe_name(name: &str) -> Result<(), String> {
             return Err("reserved Windows path".into());
         }
     }
+
     if parts == 0 {
         return Err("unsafe archive path".into());
     }
+
     Ok(())
 }
 
