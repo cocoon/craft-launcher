@@ -152,7 +152,7 @@ fn native_options(hidden: bool) -> eframe::NativeOptions {
     } else if let Some(icon) = icon {
         viewport = viewport.with_icon(icon);
     }
-    eframe::NativeOptions { viewport, persist_window: true, wgpu_options: wgpu_options(), ..Default::default() }
+    eframe::NativeOptions { viewport, persist_window: true, persistence_path: settings_file::path(APP_ID), wgpu_options: wgpu_options(), ..Default::default() }
 }
 
 /// wgpu's backend list. On Windows that is Direct3D 12 with GL as the fallback, not Vulkan:
@@ -517,7 +517,13 @@ impl Launcher {
     fn open(&mut self, cc: &eframe::CreationContext<'_>, waker: &Arc<Waker>) {
         waker.set_window(Some(cc.egui_ctx.clone()));
         if !self.started {
-            self.start(cc.storage.and_then(|s| eframe::get_value(s, SETTINGS_KEY)), waker);
+            let settings = self
+                .settings_path
+                .as_deref()
+                .and_then(|path| settings_file::load(path, SETTINGS_KEY))
+                .or_else(|| cc.storage.and_then(|s| eframe::get_value(s, SETTINGS_KEY)));
+
+            self.start(settings, waker);
         }
         self.ui.attach(&cc.egui_ctx);
     }
@@ -722,6 +728,14 @@ impl eframe::App for Shell<'_> {
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, SETTINGS_KEY, &self.launcher.ui.settings);
+
+        if let Some(path) = self.launcher.settings_path.as_deref() {
+            if let Err(e) =
+                settings_file::save(path, SETTINGS_KEY, &self.launcher.ui.settings)
+            {
+                log::warn!("couldn't save the settings: {e}");
+            }
+        }
     }
 
     fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
