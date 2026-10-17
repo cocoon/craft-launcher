@@ -1516,13 +1516,21 @@ pub mod windows {
         std::fs::read_dir(dest).map(|mut d| d.next().is_none()).unwrap_or(true)
     }
 
-    /// The published zips ship a `portable.txt` marker for manual installs; the launcher's
-    /// own record tracks the install instead, so a stale marker is never left to confuse
-    /// detection. Only that exact top-level name goes: anything else stays untouched.
+    /// Keeps a `portable.txt` marker in staged updates when the launcher runs in portable
+    /// mode, creating it if missing. Otherwise removes the marker shipped in published zips,
+    /// so the launcher's own install record remains authoritative. Only the exact top-level
+    /// marker is touched; anything else stays untouched.
     #[cfg_attr(not(windows), allow(dead_code))]
     pub(crate) fn drop_portable_marker(staging: &Path) {
         let marker = staging.join("portable.txt");
-        if let Err(e) = std::fs::remove_file(&marker)
+
+        if crate::paths::portable_root().is_some() {
+            if !marker.exists()
+                && let Err(e) = std::fs::File::create(&marker)
+            {
+                log::warn!("couldn't create {} ({e})", marker.display());
+            }
+        } else if let Err(e) = std::fs::remove_file(&marker)
             && e.kind() != std::io::ErrorKind::NotFound
         {
             log::warn!("couldn't remove {} ({e}); leaving it in place", marker.display());
