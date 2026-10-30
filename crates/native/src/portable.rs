@@ -203,6 +203,7 @@ pub fn install(
     paths: &Paths,
     directory: Option<&Path>,
     replace: bool,
+    create_portable_marker: bool,
     commit: &mut dyn FnMut(&Record) -> Result<(), String>,
 ) -> Result<Record, String> {
     let (destination, mut old_files) = match previous {
@@ -251,7 +252,7 @@ pub fn install(
     }
     std::fs::create_dir_all(&destination).map_err(|e| e.to_string())?;
     let backup = staging.0.join("backup");
-    let record = Record {
+    let mut record = Record {
         version: version.to_string(),
         kind: PackageKind::PortableZip,
         path: destination.join(executable),
@@ -281,6 +282,20 @@ pub fn install(
             let mut output = std::fs::OpenOptions::new().write(true).create_new(true).open(&target).map_err(|e| e.to_string())?;
             copied.push(relative.clone());
             std::io::copy(&mut input, &mut output).map_err(|e| e.to_string())?;
+        }
+        // Create the portable marker before committing the manifest record, so it is
+        // included in installed.json and removed with the rest of this installation.
+        if create_portable_marker {
+            let relative = PathBuf::from("portable.txt");
+            let marker = destination.join(&relative);
+            match std::fs::OpenOptions::new().write(true).create_new(true).open(&marker) {
+                Ok(_) => {
+                    record.files.push(marker);
+                    copied.push(relative);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(format!("Could not create portable marker {}: {error}", marker.display())),
+            }
         }
         commit(&record)?;
         Ok::<(), String>(())

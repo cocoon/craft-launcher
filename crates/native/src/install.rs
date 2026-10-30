@@ -197,15 +197,27 @@ pub fn install_at(
         }
         #[cfg(windows)]
         PackageKind::PortableZip => {
-            crate::portable::install(app, &file, &version, previous, job.paths, destination.as_deref(), job.replace, &mut |record| {
-                if release.version.is_some() && crate::detect::windows::executable_version(&record.path).as_ref() != release.version.as_ref() {
-                    return Err("The portable executable does not match the selected version. The installation was rolled back.".into());
-                }
-                match commit.as_deref_mut() {
-                    Some(commit) => commit(record),
-                    None => Ok(()),
-                }
-            })
+            crate::portable::install(
+                app,
+                &file,
+                &version,
+                previous,
+                job.paths,
+                destination.as_deref(),
+                job.replace,
+                crate::paths::portable_root().is_some(),
+                &mut |record| {
+                    if release.version.is_some()
+                        && crate::detect::windows::executable_version(&record.path).as_ref() != release.version.as_ref()
+                    {
+                        return Err("The portable executable does not match the selected version. The installation was rolled back.".into());
+                    }
+                    match commit.as_deref_mut() {
+                        Some(commit) => commit(record),
+                        None => Ok(()),
+                    }
+                },
+            )
             .map(Some)
         }
         #[cfg(target_os = "linux")]
@@ -401,7 +413,16 @@ fn selected_folder(folder: &str, writable: bool) -> Result<PathBuf, String> {
     } else if let Some(relative) = folder.strip_prefix("~/") {
         dirs::home_dir().ok_or("no home folder")?.join(relative)
     } else {
-        PathBuf::from(folder)
+        let path = PathBuf::from(folder);
+        if path.is_absolute() {
+            path
+        } else {
+            let launcher_dir = std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(Path::to_path_buf))
+                .ok_or("couldn't determine the launcher's folder for a relative install path")?;
+            launcher_dir.join(path)
+        }
     };
     let invalid = |reason: &str| format!("couldn't use install folder {}: {reason}", path.display());
     if folder.chars().any(|c| c.is_control() || (cfg!(windows) && c == '"')) {
