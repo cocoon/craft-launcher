@@ -96,7 +96,7 @@ pub(crate) struct Toast {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum UiAction {
     Command(Command),
-    /// [`Command::Launch`] plus one launch-count increment.
+    /// [`Command::Launch`] with the app's launch flags, plus one launch-count increment.
     Launch(String),
     /// Re-run the manual update check, clearing the auto-update back-off.
     CheckNow,
@@ -116,6 +116,7 @@ pub(crate) enum Dialog {
     Settings,
     LauncherUpdate(artcraft_launcher_core::Release),
     Versions(String),
+    LaunchFlags { app: String, flags: String },
 }
 
 impl Dialog {
@@ -130,6 +131,7 @@ impl Dialog {
             Dialog::Settings => ("settings", ""),
             Dialog::LauncherUpdate(r) => ("launcher-update", &r.tag),
             Dialog::Versions(id) => ("versions", id),
+            Dialog::LaunchFlags { app, .. } => ("launch-flags", app),
         }
     }
 }
@@ -258,7 +260,7 @@ impl LauncherUi {
         Self {
             backend,
             settings,
-            entries: SUITE.iter().map(AppEntry::new).collect(),
+            entries: SUITE.iter().filter(|a| platform.is_none_or(|p| a.runs_on(p.os))).map(AppEntry::new).collect(),
             caps,
             platform,
             checking: false,
@@ -396,9 +398,18 @@ impl LauncherUi {
             match action {
                 UiAction::Command(command) => self.backend.send(command.clone()),
                 UiAction::Launch(id) => {
+                    let flags = self.settings.launch_flags.get(id).map_or("", String::as_str);
+                    // The dialog only saves flags that split, but the settings file can be edited by hand.
+                    let Ok(args) = artcraft_launcher_core::args::split(flags) else {
+                        let name = self.entry(id).map_or(id.as_str(), |e| e.app.name).to_string();
+                        let text = crate::i18n::fmt(tl!("{name} wasn't opened: a quote in its launch options isn't closed."), &[("name", &name)]);
+                        self.queue_toast(text, true);
+                        self.flushed.push(action.clone());
+                        continue;
+                    };
                     let opened = self.settings.launches.entry(id.clone()).or_insert(0);
                     *opened = opened.saturating_add(1);
-                    self.backend.send(Command::Launch { app: id.clone() });
+                    self.backend.send(Command::Launch { app: id.clone(), args });
                 }
                 UiAction::CheckNow => {
                     self.auto_update_attempted.clear();
@@ -587,6 +598,13 @@ impl LauncherUi {
                     e.ready = ready;
                 }
                 false
+            }
+            // Can turn an update on or off, so updates are announced (or started) again.
+            Event::Installable { app, installable } => {
+                if let Some(e) = self.entry_mut(&app) {
+                    e.installable = Some(installable);
+                }
+                true
             }
             Event::Occupied { app, path } => {
                 self.dialog = Some(Dialog::Replace { app, path });
@@ -908,6 +926,7 @@ impl LauncherUi {
             .filter(|(_, e)| {
                 self.in_filter(e, self.settings.filter)
                     && !(self.settings.hide_community_apps && e.app.kind == artcraft_launcher_core::catalog::AppKind::Community)
+                    && self.platform.is_none_or(|p| e.app.runs_on(p.os))
                     && (needle.is_empty() || e.app.name.to_lowercase().contains(&needle) || e.app.tagline.to_lowercase().contains(&needle))
             })
             .collect();
@@ -967,7 +986,7 @@ impl LauncherUi {
         list.into_iter().map(|(_, e)| e.app.id).collect()
     }
 
-    /// Opens an app, and counts it for "Frequently used".
+    /// Opens an app with its launch flags, and counts it for "Frequently used".
     pub(crate) fn launch_app(&mut self, id: &str) {
         self.act(UiAction::Launch(id.to_string()));
     }
